@@ -7,7 +7,7 @@ Gem::Specification.new do |s|
   s.name        = "asset_sync"
   s.version     = AssetSync::VERSION
   s.date        = "2012-04-18"
-  s.platform    = Gem::Platform::RUBY 
+  s.platform    = Gem::Platform::RUBY
   s.authors     = ["Simon Hamilton", "David Rice", "Phil McClure"]
   s.email       = ["shamilton@rumblelabs.com", "me@davidjrice.co.uk", "pmcclure@rumblelabs.com"]
   s.homepage    = "https://github.com/rumblelabs/asset_sync"
@@ -18,6 +18,7 @@ Gem::Specification.new do |s|
 
   s.add_dependency('fog')
   s.add_dependency('activemodel')
+  # s.add_dependency('upyun-rainbow')
 
   s.add_development_dependency "rspec"
   s.add_development_dependency "bundler"

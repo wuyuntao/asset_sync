@@ -3,19 +3,16 @@ module AssetSync
 
     class BucketNotFound < StandardError; end
 
+    class BucketConnectionError < StandardError; end
+
     attr_accessor :config
 
     def initialize(cfg)
       @config = cfg
     end
 
-    def connection
-      @connection ||= Fog::Storage.new(self.config.fog_options)
-    end
-
     def bucket
-      # fixes: https://github.com/rumblelabs/asset_sync/issues/18
-      @bucket ||= connection.directories.get(self.config.fog_directory, :prefix => self.config.assets_prefix)
+      @bucket ||= UpyunRainbow::Util.new self.config.upyun_bucket, self.config.upyun_username, self.config.upyun_password, self.config.upyun_api_host
     end
 
     def log(msg)
@@ -51,18 +48,21 @@ module AssetSync
     end
 
     def get_remote_files
-      raise BucketNotFound.new("#{self.config.fog_provider} Bucket: #{self.config.fog_directory} not found.") unless bucket
+      # raise BucketNotFound.new("#{self.config.fog_provider} Bucket: #{self.config.fog_directory} not found.") unless bucket
       # fixes: https://github.com/rumblelabs/asset_sync/issues/16
       #        (work-around for https://github.com/fog/fog/issues/596)
       files = []
-      bucket.files.each { |f| files << f.key }
+      result, code = bucket.list("/#{self.config.assets_prefix}")
+      if code == 200 and result.size > 0
+        result.each {|f| files << "#{self.config.assets_prefix}/#{f[:name]}" }
+      end
       return files
     end
 
     def delete_file(f, remote_files_to_delete)
-      if remote_files_to_delete.include?(f.key)
-        log "Deleting: #{f.key}"
-        f.destroy
+      if remote_files_to_delete.include?(f)
+        log "Deleting: #{f}"
+        bucket.delete "/#{f}"
       end
     end
 
@@ -74,60 +74,20 @@ module AssetSync
 
       log "Flagging #{from_remote_files_to_delete.size} file(s) for deletion"
       # Delete unneeded remote files
-      bucket.files.each do |f|
-        delete_file(f, from_remote_files_to_delete)
+      result, code = bucket.list("/#{self.config.assets_prefix}")
+      if code == 200 and result.size > 0
+        result.each do |f|
+          delete_file "#{self.config.assets_prefix}/#{f[:name]}", from_remote_files_to_delete
+        end
       end
     end
 
     def upload_file(f)
-      # TODO output files in debug logs as asset filename only.
-      file = {
-        :key => f,
-        :body => File.open("#{path}/#{f}"),
-        :public => true,
-        :cache_control => "public, max-age=31557600",
-        :expires => CGI.rfc1123_date(Time.now + 1.year)
-      }
-
-      gzipped = "#{path}/#{f}.gz"
-      ignore = false
-
-      if config.gzip? && File.extname(f) == ".gz"
-        # Don't bother uploading gzipped assets if we are in gzip_compression mode
-        # as we will overwrite file.css with file.css.gz if it exists.
-        log "Ignoring: #{f}"
-        ignore = true
-      elsif config.gzip? && File.exists?(gzipped)
-        original_size = File.size("#{path}/#{f}")
-        gzipped_size  = File.size(gzipped)
-
-        if gzipped_size < original_size
-          percentage = ((gzipped_size.to_f/original_size.to_f)*100).round(2)
-          ext = File.extname( f )[1..-1]
-          mime = Mime::Type.lookup_by_extension( ext )
-          file.merge!({
-            :key => f,
-            :body => File.open(gzipped),
-            :content_type     => mime,
-            :content_encoding => 'gzip'
-          })
-          log "Uploading: #{gzipped} in place of #{f} saving #{percentage}%"
-        else
-          percentage = ((original_size.to_f/gzipped_size.to_f)*100).round(2)
-          log "Uploading: #{f} instead of #{gzipped} (compression increases this file by #{percentage}%)"
-        end
-      else
-        if !config.gzip? && File.extname(f) == ".gz"
-          # set content encoding for gzipped files this allows cloudfront to properly handle requests with Accept-Encoding
-          # http://docs.amazonwebservices.com/AmazonCloudFront/latest/DeveloperGuide/ServingCompressedFiles.html
-          file.merge!({
-            :content_encoding => 'gzip'
-          })
-        end
-        log "Uploading: #{f}"
+      log "Uploading: /#{f}"
+      result, code = bucket.post("/#{f}", File.open("#{path}/#{f}"))
+      if result != :ok
+        raise BucketConnectionError.new("Failed to upload /#{f}. Check your network connection and upyun configuration.")
       end
-
-      file = bucket.files.create( file ) unless ignore
     end
 
     def upload_files
